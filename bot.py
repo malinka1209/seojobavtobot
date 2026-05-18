@@ -22,7 +22,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8017102780"))
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "seoavto")
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "lynxfix")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
 if not BOT_TOKEN:
     print("❌ ОШИБКА: BOT_TOKEN не найден в .env файле!")
@@ -31,10 +30,28 @@ if not BOT_TOKEN:
 # Файлы для хранения данных
 USERS_STATS_FILE = "users_stats.json"
 SUBSCRIPTIONS_FILE = "subscriptions.json"
+SETTINGS_FILE = "settings.json"
 LOG_FOLDER = "bot_logs"
 
 # Создаем папки
 os.makedirs(LOG_FOLDER, exist_ok=True)
+
+
+# ========== НАСТРОЙКИ ==========
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {"min_review_length": 100, "max_review_length": 400}
+
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+
+
+# Загружаем настройки
+settings = load_settings()
 
 
 # ========== ЗАГРУЗКА/СОХРАНЕНИЕ ДАННЫХ ==========
@@ -134,19 +151,37 @@ class RankingSystem:
 # ========== УМНЫЙ ГЕНЕРАТОР ОТЗЫВОВ ==========
 class ReviewGenerator:
 
+    def __init__(self):
+        self.min_length = settings.get("min_review_length", 100)
+        self.max_length = settings.get("max_review_length", 400)
+
+    def _ensure_length(self, review):
+        """Подгоняет отзыв под нужную длину"""
+        if len(review) < self.min_length:
+            # Добавляем фразы
+            add_phrases = [" Очень доволен результатом.", " Спасибо за работу!", " Всем рекомендую!",
+                           " Буду обращаться еще."]
+            while len(review) < self.min_length and add_phrases:
+                review += random.choice(add_phrases)
+        elif len(review) > self.max_length:
+            review = review[:self.max_length - 3] + "..."
+        return review
+
     def generate(self, company, instruction_text):
         text_lower = instruction_text.lower()
 
         if 'химчистк' in text_lower or 'чистк' in text_lower:
-            return self._cleaning_review(company)
+            review = self._cleaning_review(company)
         elif 'авто' in text_lower or 'сервис' in text_lower or 'vag' in text_lower:
-            return self._auto_review(company)
+            review = self._auto_review(company)
         elif 'мебель' in text_lower or 'кухн' in text_lower or 'шкаф' in text_lower:
-            return self._furniture_review(company)
+            review = self._furniture_review(company)
         elif 'кафе' in text_lower or 'ресторан' in text_lower:
-            return self._cafe_review(company)
+            review = self._cafe_review(company)
         else:
-            return self._default_review(company)
+            review = self._default_review(company)
+
+        return self._ensure_length(review), len(review)
 
     def _cleaning_review(self, company):
         templates = [
@@ -359,6 +394,89 @@ async def admin_remove_subscription(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("❌ Неверный формат")
 
 
+async def admin_set_min_length(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Установить минимальную длину отзыва (только админ)"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Доступ запрещен")
+        return
+
+    args = context.args
+    if len(args) < 1:
+        await update.message.reply_text(
+            f"❌ Использование: /set_min_length <символы>\n\n"
+            f"Пример: /set_min_length 150\n\n"
+            f"Текущая минимальная длина: {settings.get('min_review_length', 100)} символов"
+        )
+        return
+
+    try:
+        new_length = int(args[0])
+        if new_length < 50:
+            await update.message.reply_text("❌ Минимальная длина не может быть меньше 50 символов")
+            return
+        if new_length > 500:
+            await update.message.reply_text("❌ Минимальная длина не может быть больше 500 символов")
+            return
+
+        settings["min_review_length"] = new_length
+        save_settings(settings)
+
+        await update.message.reply_text(f"✅ Минимальная длина отзыва установлена: {new_length} символов")
+
+    except ValueError:
+        await update.message.reply_text("❌ Введите число")
+
+
+async def admin_set_max_length(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Установить максимальную длину отзыва (только админ)"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Доступ запрещен")
+        return
+
+    args = context.args
+    if len(args) < 1:
+        await update.message.reply_text(
+            f"❌ Использование: /set_max_length <символы>\n\n"
+            f"Пример: /set_max_length 400\n\n"
+            f"Текущая максимальная длина: {settings.get('max_review_length', 400)} символов"
+        )
+        return
+
+    try:
+        new_length = int(args[0])
+        if new_length < 100:
+            await update.message.reply_text("❌ Максимальная длина не может быть меньше 100 символов")
+            return
+        if new_length > 1000:
+            await update.message.reply_text("❌ Максимальная длина не может быть больше 1000 символов")
+            return
+
+        settings["max_review_length"] = new_length
+        save_settings(settings)
+
+        await update.message.reply_text(f"✅ Максимальная длина отзыва установлена: {new_length} символов")
+
+    except ValueError:
+        await update.message.reply_text("❌ Введите число")
+
+
+async def admin_show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать текущие настройки (только админ)"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Доступ запрещен")
+        return
+
+    await update.message.reply_text(
+        f"📊 <b>Текущие настройки бота</b>\n\n"
+        f"📏 Мин. длина отзыва: {settings.get('min_review_length', 100)} симв.\n"
+        f"📏 Макс. длина отзыва: {settings.get('max_review_length', 400)} симв.\n"
+        f"👑 Админ ID: {ADMIN_ID}\n"
+        f"📢 Канал: @{CHANNEL_USERNAME}\n"
+        f"👤 Поддержка: @{SUPPORT_USERNAME}",
+        parse_mode='HTML'
+    )
+
+
 # ========== КОМАНДЫ ПОЛЬЗОВАТЕЛЯ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -528,7 +646,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = parse_instruction(url)
         generator = ReviewGenerator()
-        review = generator.generate(data['company'], data['instruction_text'])
+        review, review_length = generator.generate(data['company'], data['instruction_text'])
         maps_url = make_maps_url(data['address'])
 
         stats = load_stats()
@@ -573,7 +691,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await status_msg.edit_text(
             f"✅ <b>{data['company']}</b>\n📍 {data['address']}\n\n"
-            f"📝 <b>Отзыв:</b>\n<code>{review}</code>\n\n"
+            f"📝 <b>Отзыв ({review_length} симв.):</b>\n<code>{review}</code>\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"{level_data['emoji']} Уровень: {level_data['name']}\n"
             f"📊 Всего: {new_count} отзывов{level_up}\n"
@@ -614,7 +732,7 @@ async def new_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     generator = ReviewGenerator()
-    new_review = generator.generate(company, instruction)
+    new_review, new_length = generator.generate(company, instruction)
     context.user_data['last_review'] = new_review
 
     maps_url = make_maps_url(address)
@@ -625,8 +743,8 @@ async def new_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("🗺 Карты", url=maps_url)]
     ])
 
-    await query.edit_message_text(f"🆕 <b>Новый отзыв:</b>\n\n<code>{new_review}</code>", parse_mode='HTML',
-                                  reply_markup=keyboard)
+    await query.edit_message_text(f"🆕 <b>Новый отзыв ({new_length} симв.):</b>\n\n<code>{new_review}</code>",
+                                  parse_mode='HTML', reply_markup=keyboard)
 
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -641,6 +759,9 @@ def main():
     # Админ-команды
     app.add_handler(CommandHandler("give_sub", admin_give_subscription))
     app.add_handler(CommandHandler("remove_sub", admin_remove_subscription))
+    app.add_handler(CommandHandler("set_min_length", admin_set_min_length))
+    app.add_handler(CommandHandler("set_max_length", admin_set_max_length))
+    app.add_handler(CommandHandler("settings", admin_show_settings))
 
     # Пользовательские команды
     app.add_handler(CommandHandler("start", start))
@@ -657,6 +778,8 @@ def main():
     print("=" * 50)
     print("✅ БОТ ЗАПУЩЕН!")
     print(f"👑 Админ ID: {ADMIN_ID}")
+    print(f"📏 Мин. длина: {settings.get('min_review_length', 100)} симв.")
+    print(f"📏 Макс. длина: {settings.get('max_review_length', 400)} симв.")
     print("=" * 50)
 
     app.run_polling()
